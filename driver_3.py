@@ -1,110 +1,164 @@
 #!/usr/bin/python
 
 import sys
-import csv
-import statistics as st
+import queue
 
 
 class Csp:
     def __init__(self):
-        self.sudoku_start = "./sudoku_start.txt"
-        self.sudoku_finish = "./sudoku_finish.txt"
+        self.sudokus_start = "./sudokus_start.txt"
+        self.sudokus_finish = "./sudokus_finish.txt"
         self.outputFile = "./output.txt"
-        self.init_board = {}
-        self.domains = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-        self.constrains = []
+        self.board = {}
+        self.initial_domain = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+        self.fieldsDomains = {}        # e.g. {field1: [1,2,3], , ... } contains fields with zero and more than one value
+        self.constrains = {}           # key (e.g. col_1 || row_A || box_1) -> constrain
+        self.relations_between_fields_and_constrains = {}       # field -> [constrain_key, ...]
         self.rows = ["A", "B", "C", "D", "E", "F", "G", "H", "I"]
         self.columns = ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
+        self.queue_ = queue.Queue(maxsize=0)
 
     def start(self):
-
-        self.init_board = self.normalize_data(self.init_board)
+        self.board = self.normalize_data(self.board)
         self.setConstrains()
+        self.setFieldsDomains(self.board)
+        self.createQueue()
 
-        result = self.AC3()
-
-        if result:
-            self.writeOutput(result + " AC3")
+        if self.csp():
+            self.writeOutput(self.getResult() + " AC3")
+            print(self.getResult())
         else:
-            result = self.backtracking()
-            self.writeOutput(result + " BTS")
+            self.backtracking()
+            self.writeOutput(self.getResult() + " BTS")
 
-    def AC3(self):
+    def getResult(self):
+        return "".join(map(lambda x: str(x[1]), self.board.items()))
 
-        result = ""
-        board = self.init_board.copy()
-        set_ = self.getOptimalSet(board)
+    def csp(self):
+        while self.queue_.qsize():
+            field = self.queue_.get()
 
-        # Compute by set. Set is row, column or box has minimum empty fields
-        while set_:
+            if not self.fieldsDomains.get(field, False):    # don't process state if it excluded from fields_domain
+                continue
 
-            for field in board:
-                set_ = self.getOptimalSet(board)
+            domain_changed = self.applyConstrains(field)
 
+            if len(self.fieldsDomains.get(field)) == 0:     # domain is empty - no solutions
+                return False
 
-        return result
+            if len(self.fieldsDomains[field]) == 1:         # move field on board and remove from fields_domains
+                self.board[field] = str(self.fieldsDomains[field][0])
+                del (self.fieldsDomains[field])
+
+            if domain_changed:
+                related_fields = self.getRelatedFields(field)
+                self.addToQueue(related_fields)
+
+            if len(self.fieldsDomains) == 0:
+                return True
+
+        return False
 
     def backtracking(self):
 
         result = ""
-        while not True:
-            return result
+        return result
 
-    def getOptimalSet(self, board):
+    def getRelatedFields(self, field):
 
-        # Take constrains lists as base of set
-        result_set = []
-        min_zero_count = 9
-        for set in self.constrains:
-            zero_count = 0
-            for field, value in board:
-                if value == "0":
-                    zero_count += 1
-            if zero_count > min_zero_count:
-                min_zero_count = zero_count
-                result_set = set
+        total_fields = []
 
-        return result_set
+        for constrain_key in self.relations_between_fields_and_constrains[field]:
+            related_fields = self.constrains[constrain_key].copy()
+            related_fields.remove(field)
+            total_fields += related_fields
 
-    def checkConstrains(self, board, insert_pos):
+        return list(set(total_fields))
+
+    def createQueue(self):
+
+        self.queue_ = queue.Queue(maxsize=0)
+        for field, field_domain in self.fieldsDomains.items():
+            self.queue_.put(field)
+
+    def addToQueue(self, fields):
+
+        for field in fields:
+            self.queue_.put(field)
+
+    def applyConstrains(self, field):
+
+        domain_change = False
+        values_for_remove = []
+
+        if not self.fieldsDomains.get(field, False):
+            return False
+
+        for field_domain in self.fieldsDomains[field]:
+            if self.hasConstrains(field, field_domain):
+                values_for_remove.append(field_domain)
+                domain_change = True
+
+        if values_for_remove:
+            domain = self.fieldsDomains[field].copy()
+            for value in values_for_remove:
+                domain.remove(value)
+            self.fieldsDomains[field] = domain
+
+        return domain_change
+
+    def hasConstrains(self, field, field_domain):
 
         has_similar_fields = False
         end_loops = False
 
-        for constrain in self.constrains:
-            if next(iter(insert_pos)) in constrain:
+        board = self.board.copy()
+        board[field] = str(field_domain)
 
-                for field1 in constrain:
-                    checked_fields = []
-                    for field2 in constrain:
+        for constrain_key in self.relations_between_fields_and_constrains[field]:
 
-                        if (not field2 in checked_fields) and \
-                        board.index(field1) != 0 and board.index(field2) != 0 \
-                        and board.index(field1) == board.index(field2):
+            for field1 in self.constrains[constrain_key]:
+                checked_fields = []
 
-                            has_similar_fields = True
+                for field2 in self.constrains[constrain_key]:
 
-                            end_loops = True
-                            break
+                    if (field2 not in checked_fields) and (field1 != field2) and \
+                        board[field1] != "0" and board[field2] != "0" \
+                            and board[field1] == board[field2]:
 
-                    if end_loops:
+                        has_similar_fields = True
+
+                        end_loops = True
                         break
-                    checked_fields.append(field1)
 
                 if end_loops:
                     break
 
+                checked_fields.append(field1)
+
+            if end_loops:
+                break
+
         return has_similar_fields
+
+    def setFieldsDomains(self, board):
+
+        for field, value in board.items():
+            if value == "0":
+                self.fieldsDomains[field] = self.initial_domain
 
     def setConstrains(self):
 
         # row constrain
         for row in self.rows:
-            column_constrain = []
+            row_constrain = []
             for column in self.columns:
-                column_constrain.append(row + column)
+                row_constrain.append(row + column)
 
-            self.constrains.append(column_constrain)
+                # fill relations between fields and constrains
+                self.fillRelationsBetweenFieldsAndConstrains(row + column, "row_" + row)
+
+            self.constrains.update({"row_" + row: row_constrain})
 
         # column constrain
         for column in self.columns:
@@ -112,33 +166,50 @@ class Csp:
             for row in self.rows:
                 column_constrain.append(row + column)
 
-            self.constrains.append(column_constrain)
+                # fill relations between fields and constrains
+                self.fillRelationsBetweenFieldsAndConstrains(row + column, "col_" + column)
+
+            self.constrains.update({"col_" + column: column_constrain})
 
         # box constrain
         axis_range = [[0, 3],[3, 6],[6, 9]]
+        i = 0
         for x_col, y_col in axis_range:
-            box_constrain = []
             for x_row, y_row in axis_range:
+                i = i + 1
+                box_constrain = []
                 for column in self.columns[x_col:y_col]:
                     for row in self.rows[x_row:y_row]:
                         box_constrain.append(row + column)
 
-                self.constrains.append(box_constrain)
+                        # fill relations between fields and constrains
+                        self.fillRelationsBetweenFieldsAndConstrains(row + column, "box_" + str(i))
+
+                self.constrains.update({"box_" + str(i): box_constrain})
+
+    def fillRelationsBetweenFieldsAndConstrains(self, field, constrain_key):
+
+        if self.relations_between_fields_and_constrains.get(field, False):
+            old_value = self.relations_between_fields_and_constrains[field]
+            self.relations_between_fields_and_constrains[field] = old_value + [constrain_key]
+        else:
+            self.relations_between_fields_and_constrains[field] = [constrain_key]
 
     def writeOutput(self, row):
-        file = open(self.outputFile, "w")
+
+        file = open(self.outputFile, "a")
         file.write(row)
         file.close()
 
     def normalize_data(self, input_data):
 
         board = {}
+        i = 0
 
         for row in self.rows:
-            i = 0
             for column in self.columns:
-                i = i + 1
                 board[row + column] = input_data[i]
+                i = i + 1
 
         return board
 
@@ -148,11 +219,19 @@ def main(input_data=None):
     csp = Csp()
 
     if input_data:
-        csp.init_board = input_data
+        csp.board = input_data
     else:
-        file = open(csp.sudoku_start)
-        csp.init_board = file.readline()
+
+        file = open(csp.sudokus_start)
+
+        for line in file:
+            csp.__init__()
+            csp.board = line
+            csp.start()
+
         file.close()
+
+        exit(3)
 
     csp.start()
 
@@ -161,7 +240,7 @@ if __name__ == '__main__':
 
     input_data = None
 
-    if sys.argv[1]:
+    if len(sys.argv) > 1:
         input_data = sys.argv[1]
 
     main(input_data)
