@@ -2,6 +2,7 @@
 
 import sys
 import queue
+import os
 
 
 class Csp:
@@ -9,62 +10,90 @@ class Csp:
         self.sudokus_start = "./sudokus_start.txt"
         self.sudokus_finish = "./sudokus_finish.txt"
         self.outputFile = "./output.txt"
-        self.board = {}
-        self.initial_domain = [1, 2, 3, 4, 5, 6, 7, 8, 9]
-        self.fieldsDomains = {}        # e.g. {field1: [1,2,3], , ... } contains fields with zero and more than one value
-        self.constrains = {}           # key (e.g. col_1 || row_A || box_1) -> constrain
-        self.relations_between_fields_and_constrains = {}       # field -> [constrain_key, ...]
         self.rows = ["A", "B", "C", "D", "E", "F", "G", "H", "I"]
         self.columns = ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
-        self.queue_ = queue.Queue(maxsize=0)
+        self.queue_ac3 = queue.Queue(maxsize=0)
+        self.initial_domain = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+        self.constrains = {}           # key (e.g. col_1 || row_A || box_1) -> constrain
+        self.relations_between_fields_and_constrains = {}       # field -> [constrain_key, ...]
 
-    def start(self):
-        self.board = self.normalize_data(self.board)
+    def start(self, board):
+        board = self.normalize_data(board)
         self.setConstrains()
-        self.setFieldsDomains(self.board)
-        self.createQueue()
+        fields_domains = self.setFieldsDomains(board)
+        self.createQueue(fields_domains)
 
-        if self.csp():
-            self.writeOutput(self.getResult() + " AC3")
-            print(self.getResult())
+        if self.AC3(board, fields_domains):
+            self.writeOutput(self.getResultString(board) + " AC3")
         else:
-            self.backtracking()
-            self.writeOutput(self.getResult() + " BTS")
+            result_board = self.backtracking(board, fields_domains)
+            self.writeOutput(self.getResultString(result_board) + " BTS")
 
-    def getResult(self):
-        return "".join(map(lambda x: str(x[1]), self.board.items()))
+    def backtracking(self, board, fields_domains):
 
-    def csp(self):
-        while self.queue_.qsize():
-            field = self.queue_.get()
+        if len(fields_domains) == 0:
+            return board
 
-            if not self.fieldsDomains.get(field, False):    # don't process state if it excluded from fields_domain
+        field = self.successorFunction(fields_domains)
+
+        for field_value in fields_domains[field]:
+            if self.constrainsWorked(field, field_value, board):
+                field_domain = fields_domains[field].copy()
+                field_domain.remove(field_value)
+                fields_domains[field] = field_domain
+
+                if len(fields_domains.get(field)) == 0:  # domain is empty - no solutions
+                    return False
+            else:
+                new_board = board.copy()
+                new_fields_domains = fields_domains.copy()
+
+                new_board[field] = str(field_value)
+                del(new_fields_domains[field])
+
+                self.createQueue(new_fields_domains)
+                if self.AC3(new_board, new_fields_domains):
+                    return new_board
+
+                result_board = self.backtracking(new_board, new_fields_domains)
+
+                if result_board:
+                    return result_board
+
+        return False
+
+    def AC3(self, board, fields_domains):
+        while self.queue_ac3.qsize():
+            field = self.queue_ac3.get()
+
+            if not fields_domains.get(field, False):    # don't process state if it excluded from fields_domain
                 continue
 
-            domain_changed = self.applyConstrains(field)
+            domain_changed = self.applyConstrains(field, board, fields_domains)
 
-            if len(self.fieldsDomains.get(field)) == 0:     # domain is empty - no solutions
+            if len(fields_domains.get(field)) == 0:     # domain is empty - no solutions
                 return False
 
-            if len(self.fieldsDomains[field]) == 1:         # move field on board and remove from fields_domains
-                self.board[field] = str(self.fieldsDomains[field][0])
-                del (self.fieldsDomains[field])
+            if len(fields_domains[field]) == 1:         # move field on board and remove from fields_domains
+                board[field] = str(fields_domains[field][0])
+                del (fields_domains[field])
 
             if domain_changed:
-                related_fields = self.getRelatedFields(field)
+                related_fields = self.getRelatedFields(field, fields_domains)
                 self.addToQueue(related_fields)
 
-            if len(self.fieldsDomains) == 0:
+            if len(fields_domains) == 0:
                 return True
 
         return False
 
-    def backtracking(self):
+    def successorFunction(self, fields_domains: dict):
 
-        result = ""
-        return result
+        fields_domains_sorted = list(sorted(fields_domains.items(), key=lambda domain: len(domain[1]) + (1 - len(self.getRelatedFields(domain[0], fields_domains))/27)))
 
-    def getRelatedFields(self, field):
+        return fields_domains_sorted.pop(0)[0]
+
+    def getRelatedFields(self, field, fields_domains):
 
         total_fields = []
 
@@ -73,47 +102,50 @@ class Csp:
             related_fields.remove(field)
             total_fields += related_fields
 
-        return list(set(total_fields))
+        fields_to_queue = list(set(total_fields).intersection(set(map(lambda x: x[0], fields_domains.items()))))
 
-    def createQueue(self):
+        return fields_to_queue
 
-        self.queue_ = queue.Queue(maxsize=0)
-        for field, field_domain in self.fieldsDomains.items():
-            self.queue_.put(field)
+    def createQueue(self, fields_domains):
+
+        self.queue_ac3 = queue.Queue(maxsize=0)
+
+        for field, field_domain in fields_domains.items():
+            self.queue_ac3.put(field)
 
     def addToQueue(self, fields):
 
         for field in fields:
-            self.queue_.put(field)
+            self.queue_ac3.put(field)
 
-    def applyConstrains(self, field):
+    def applyConstrains(self, field, board, fields_domains):
 
         domain_change = False
         values_for_remove = []
 
-        if not self.fieldsDomains.get(field, False):
+        if not fields_domains.get(field, False):
             return False
 
-        for field_domain in self.fieldsDomains[field]:
-            if self.hasConstrains(field, field_domain):
-                values_for_remove.append(field_domain)
+        for field_value in fields_domains[field]:
+            if self.constrainsWorked(field, field_value, board):
+                values_for_remove.append(field_value)
                 domain_change = True
 
         if values_for_remove:
-            domain = self.fieldsDomains[field].copy()
+            domain = fields_domains[field].copy()
             for value in values_for_remove:
                 domain.remove(value)
-            self.fieldsDomains[field] = domain
+            fields_domains[field] = domain
 
         return domain_change
 
-    def hasConstrains(self, field, field_domain):
+    def constrainsWorked(self, field, field_value, board_):
 
         has_similar_fields = False
         end_loops = False
 
-        board = self.board.copy()
-        board[field] = str(field_domain)
+        board = board_.copy()
+        board[field] = str(field_value)
 
         for constrain_key in self.relations_between_fields_and_constrains[field]:
 
@@ -143,9 +175,12 @@ class Csp:
 
     def setFieldsDomains(self, board):
 
+        fields_domains = {}
         for field, value in board.items():
             if value == "0":
-                self.fieldsDomains[field] = self.initial_domain
+                fields_domains[field] = self.initial_domain
+
+        return fields_domains
 
     def setConstrains(self):
 
@@ -195,6 +230,9 @@ class Csp:
         else:
             self.relations_between_fields_and_constrains[field] = [constrain_key]
 
+    def getResultString(self, board):
+        return "".join(map(lambda x: str(x[1]), board.items()))
+
     def writeOutput(self, row):
 
         file = open(self.outputFile, "a")
@@ -216,24 +254,29 @@ class Csp:
 
 def main(input_data=None):
 
+    board = {}
+
     csp = Csp()
 
+    if os.path.isfile(csp.outputFile):
+        os.remove(csp.outputFile)
+
     if input_data:
-        csp.board = input_data
+        board = input_data
     else:
 
         file = open(csp.sudokus_start)
 
         for line in file:
             csp.__init__()
-            csp.board = line
-            csp.start()
+            board = line
+            csp.start(board)
 
         file.close()
 
         exit(3)
 
-    csp.start()
+    csp.start(board)
 
 
 if __name__ == '__main__':
